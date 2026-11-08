@@ -1,5 +1,7 @@
 # CI/CD and production deployment
 
+For step-by-step Ubuntu server commands, SSH key setup, nginx/systemd installation, HTTPS, and troubleshooting, start with the root [production server configuration guide](../README.md#production-server-configuration).
+
 The GitHub Actions pipeline runs four stages:
 
 | Stage | Trigger | Checks / output |
