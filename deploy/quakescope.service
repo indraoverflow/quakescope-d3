@@ -1,0 +1,20 @@
+[Unit]
+Description=QuakeScope earthquake API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=quakescope
+Group=quakescope
+WorkingDirectory=/opt/quakescope/current
+ExecStart=/opt/quakescope/current/quakescope
+Environment=LISTEN_ADDR=127.0.0.1:8081
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

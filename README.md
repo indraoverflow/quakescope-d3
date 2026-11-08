@@ -66,3 +66,7 @@ Data may be delayed or revised. This application is not an official earthquake e
 Automated checks cover coordinate axes, marker encodings, interaction store updates, parsers, UTC normalization, malformed records, filtering, deduplication, upstream errors, and stale-cache preservation. Live API synchronization was checked for both providers. Browser rendering, touch gestures, and actual GPU frame rate could not be checked because no browser was available in the implementation session. Test those on desktop and mobile before release.
 
 The globe dependency creates a large JavaScript bundle; measured build output warns about chunk size. Next work: browser interaction tests, device profiling and marker batching if needed, plus a smaller globe dependency bundle. No lint configuration is included; TypeScript and `go vet` provide static checks.
+
+## CI/CD
+
+See [pipeline and production setup](deploy/README.md) for unit/integration stages, build artifacts, production-only deployment, tag-only releases, and required production secrets.
