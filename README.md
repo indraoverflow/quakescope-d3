@@ -2,9 +2,26 @@
 
 An interactive Earth observatory built with React, React Three Fiber, r3f-globe, Three.js, Zustand, TanStack Query, Tailwind, and Go/chi. Real provider data only; no runtime fixtures.
 
+## Tech stack
+
+Versions below describe the current manifests; `web/package-lock.json` pins the installed frontend dependencies. Use `npm ci` to reproduce them.
+
+| Layer | Technology | Purpose |
+| --- | --- | --- |
+| Frontend | React 19, TypeScript 7, Vite 7 | Client UI and production static build |
+| 3D | Three.js 0.187, React Three Fiber 9, drei 10, r3f-globe 1.6 | Earth, markers, controls, and camera |
+| UI / state | Tailwind CSS 4, Zustand 5, TanStack Query 5 | Styles, explorer state, and API fetching |
+| Backend | Go 1.24+, chi 5, standard `net/http` | API and background provider polling |
+| Data | USGS GeoJSON and BMKG open data | Real earthquake events; no API keys required |
+| Storage | Concurrency-safe process memory | Latest successful provider snapshots; cleared on restart |
+| Tests | Go testing/race detector, Vitest 5, jsdom | Unit and integration checks |
+| Delivery | GitHub Actions, SSH/SCP, systemd, nginx | Tested artifacts and production rollout |
+
+The production server runs the compiled Go executable and nginx. Node, npm, Go, Docker, a database, and Redis are not required on that server when deploying CI artifacts. A WebGL-capable browser renders the globe on the user's device.
+
 ## Run locally
 
-Requires Go 1.24+ and Node 22.12+.
+Requires Go 1.24+ and Node 22.22.2+ on the Node 22 line (or another version supported by the locked dependencies). CI uses Node 22; the jsdom test dependency determines this minimum.
 
 ```sh
 cd server
@@ -66,3 +83,204 @@ Data may be delayed or revised. This application is not an official earthquake e
 Automated checks cover coordinate axes, marker encodings, interaction store updates, parsers, UTC normalization, malformed records, filtering, deduplication, upstream errors, and stale-cache preservation. Live API synchronization was checked for both providers. Browser rendering, touch gestures, and actual GPU frame rate could not be checked because no browser was available in the implementation session. Test those on desktop and mobile before release.
 
 The globe dependency creates a large JavaScript bundle; measured build output warns about chunk size. Next work: browser interaction tests, device profiling and marker batching if needed, plus a smaller globe dependency bundle. No lint configuration is included; TypeScript and `go vet` provide static checks.
+
+## CI/CD
+
+See [pipeline and production setup](deploy/README.md) for unit/integration stages, build artifacts, production-only deployment, tag-only releases, and required production secrets.
+
+| Git event | Result |
+| --- | --- |
+| Pull request to `main` | Unit tests → integration tests/build gates; no deployment or release |
+| Push / merge to `main` | Tests → build → SSH deployment to `prod` |
+| Manually push `vMAJOR.MINOR.PATCH` | Tests → build → GitHub Release; no deployment |
+| Manual workflow run | Tests and build only |
+
+Unit and integration jobs run in parallel; build waits for both. Main pushes never create tags or releases. Tag creation remains manual.
+
+## Production server configuration
+
+This guide targets **Ubuntu 24.04 LTS, x86_64 / amd64**, using systemd and nginx. The CI artifact is Linux amd64; ARM servers require a different build target. Commands marked **server** run through your existing administrator SSH login. Commands marked **workstation** run from this repository on your computer. Replace `SERVER_IP`, `ADMIN`, and `quakescope.example.com` with your values.
+
+### 1. Prepare packages, network, and users (server)
+
+```sh
+uname -m  # must print x86_64 for the current CI artifact
+sudo apt-get update
+sudo apt-get install -y nginx openssh-server curl ca-certificates tar coreutils util-linux sudo
+sudo systemctl enable --now nginx
+
+sudo adduser --disabled-password --gecos '' deploy-quakescope
+sudo useradd --system --user-group --home-dir /nonexistent --shell /usr/sbin/nologin quakescope
+sudo install -d -o deploy-quakescope -g deploy-quakescope -m 755 /opt/quakescope
+sudo install -d -o deploy-quakescope -g deploy-quakescope -m 755 /opt/quakescope/releases
+sudo install -d -o deploy-quakescope -g deploy-quakescope -m 700 /home/deploy-quakescope/.ssh
+```
+
+These user-creation commands are for first setup; skip them if the accounts already exist. Allow inbound TCP **22** (SSH), **80** (HTTP/certificate validation), and **443** (HTTPS) in your provider firewall and any existing host firewall. Do not expose port 8081. GitHub-hosted deployment runners must be able to reach SSH; an IP-restricted firewall needs an appropriate runner/network arrangement. Allow outbound DNS and HTTPS to `earthquake.usgs.gov` and `data.bmkg.go.id` for polling.
+
+Point your domain's DNS A record at the server. Configure an AAAA record only if IPv6 access is actually working.
+
+### 2. Create the deployment SSH key (workstation)
+
+```sh
+ssh-keygen -t ed25519 -f ~/.ssh/quakescope-prod -C 'quakescope-github-actions' -N ''
+scp ~/.ssh/quakescope-prod.pub ADMIN@SERVER_IP:/tmp/quakescope-prod.pub
+```
+
+Use a new dedicated key path; do not overwrite an existing key. The unattended workflow uses this key without a passphrase. On the **server**, install only its public key:
+
+```sh
+sudo install -o deploy-quakescope -g deploy-quakescope -m 600 \
+  /tmp/quakescope-prod.pub /home/deploy-quakescope/.ssh/authorized_keys
+rm /tmp/quakescope-prod.pub
+```
+
+For an account with existing authorized keys, append the new public key instead of replacing the file. Test from the **workstation**:
+
+```sh
+ssh -i ~/.ssh/quakescope-prod deploy-quakescope@SERVER_IP 'id && test -w /opt/quakescope'
+```
+
+Ubuntu's [OpenSSH guide](https://ubuntu.com/server/docs/how-to/security/openssh-server/) explains key authentication and file permissions.
+
+### 3. Install the API service and nginx configuration
+
+From a **workstation checkout containing the `deploy/` files**, copy the templates using your administrator login. For first setup before the CI/CD PR is merged, use that PR's checkout:
+
+```sh
+scp deploy/quakescope.service deploy/nginx.conf ADMIN@SERVER_IP:/tmp/
+```
+
+On the **server**:
+
+```sh
+sudo install -m 644 /tmp/quakescope.service /etc/systemd/system/quakescope.service
+sudo systemctl daemon-reload
+sudo systemctl enable quakescope
+
+command -v systemctl  # expected /usr/bin/systemctl on this Ubuntu setup
+sudo visudo -f /etc/sudoers.d/quakescope-deploy
+```
+
+Add this single sudoers line, matching the absolute `systemctl` path printed above:
+
+```sudoers
+deploy-quakescope ALL=(root) NOPASSWD: /usr/bin/systemctl restart quakescope, /usr/bin/systemctl stop quakescope
+```
+
+Then continue on the **server**:
+
+```sh
+sudo chmod 440 /etc/sudoers.d/quakescope-deploy
+sudo visudo -cf /etc/sudoers.d/quakescope-deploy
+sudo install -m 644 /tmp/nginx.conf /etc/nginx/sites-available/quakescope
+sudo sed -i 's/quakescope.example.com/YOUR_REAL_DOMAIN/g' /etc/nginx/sites-available/quakescope
+sudo ln -s /etc/nginx/sites-available/quakescope /etc/nginx/sites-enabled/quakescope
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+Replace `YOUR_REAL_DOMAIN` before running the substitution. Skip the symlink command if the site is already enabled. Keep other nginx sites intact. The service is enabled but should **not be started yet**: the first deployment supplies `/opt/quakescope/current/quakescope` and starts it. The site will not serve the application until that deployment finishes.
+
+The request path is:
+
+```text
+Browser → nginx :443 → /                 → /opt/quakescope/current/web
+                    → /api/v1/*          → Go at 127.0.0.1:8081
+```
+
+The nginx [`proxy_pass` configuration](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_pass) preserves the `/api/` path. Keep its upstream port aligned with the service and deployment health check.
+
+### 4. Configure GitHub production secrets (workstation / GitHub)
+
+Open repository **Settings → Environments → prod**. The environment is already created with a `main` branch restriction. Add:
+
+| Environment secret | Value |
+| --- | --- |
+| `PROD_HOST` | Server IPv4 address or DNS name; no `https://`, path, or port |
+| `PROD_USER` | `deploy-quakescope` |
+| `PROD_SSH_KEY` | Complete private key from `~/.ssh/quakescope-prod`, including BEGIN/END lines |
+| `PROD_KNOWN_HOSTS` | Verified SSH host entry matching exactly the host used in `PROD_HOST` |
+
+For the host key, obtain its fingerprint from the **server administrator console**:
+
+```sh
+sudo ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+```
+
+On the **workstation**, collect the candidate and compare its fingerprint with the trusted console output before saving it:
+
+```sh
+ssh-keyscan -t ed25519 SERVER_IP > /tmp/quakescope-known-hosts
+ssh-keygen -lf /tmp/quakescope-known-hosts
+# After fingerprints match:
+gh secret set PROD_HOST --env prod --body 'SERVER_IP'
+gh secret set PROD_USER --env prod --body 'deploy-quakescope'
+gh secret set PROD_SSH_KEY --env prod < ~/.ssh/quakescope-prod
+gh secret set PROD_KNOWN_HOSTS --env prod < /tmp/quakescope-known-hosts
+```
+
+Run `gh` commands from this repository with your authenticated GitHub account. If using a DNS name in `PROD_HOST`, use that same DNS name for `ssh-keyscan`. Private keys and secrets must not be committed to Git.
+
+### 5. Deploy, enable HTTPS, and verify
+
+Once the server and secrets are ready, merge the CI/CD PR into `main` (or push a subsequent approved change to `main`). GitHub Actions tests, builds, copies the artifact, verifies checksums, changes the `current` symlink, restarts the API, and checks its health. Manual workflow dispatch does not deploy.
+
+On the **server**, after the deployment succeeds:
+
+```sh
+sudo systemctl status quakescope --no-pager
+curl --fail http://127.0.0.1:8081/api/v1/health
+curl --fail http://quakescope.example.com/api/v1/health
+```
+
+Use your actual domain. Both health requests should return `{"status":"ok"}`. Install Certbot using its [official nginx instructions](https://certbot.eff.org/instructions?ws=nginx&os=pip), then request HTTPS and verify renewal:
+
+```sh
+sudo certbot --nginx -d quakescope.example.com --redirect
+sudo certbot renew --dry-run
+curl --fail https://quakescope.example.com/api/v1/health
+curl --fail https://quakescope.example.com/api/v1/sources/status
+```
+
+Open the site and verify the globe and event list. Provider synchronization can take a few seconds after a restart; process health does not guarantee upstream availability. The rollout includes a brief backend restart and attempts rollback on failed health checks. Old releases are retained under `/opt/quakescope/releases`; monitor disk space and retain at least the current and previous release when cleaning up.
+
+### Runtime settings and file locations
+
+| Setting / path | Current value / role |
+| --- | --- |
+| `LISTEN_ADDR` | `127.0.0.1:8081`, set in `/etc/systemd/system/quakescope.service` |
+| SSH endpoint | Port 22; the current deployment script does not support a custom port |
+| Active release | `/opt/quakescope/current` symlink |
+| Release files | `/opt/quakescope/releases/<commit-sha>/quakescope` and `web/` |
+| nginx site | `/etc/nginx/sites-available/quakescope` |
+| Service logs | `sudo journalctl -u quakescope -n 100 --no-pager` |
+| nginx logs | `/var/log/nginx/error.log` and `/var/log/nginx/access.log` |
+| Poll interval | Four minutes; currently fixed in Go code |
+| Provider credentials | None |
+
+There is no production `.env` loader, frontend API URL variable, or database configuration. The frontend calls same-origin `/api`; nginx forwards it. To change port 8081, update the service's `LISTEN_ADDR`, nginx upstream, and `deploy/activate.sh` health URL together, then reload systemd/nginx. To change the port for local development, also change the Vite proxy.
+
+### Troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| SSH authentication fails | Secret contains the matching private key; public key is in the deploy account's authorized_keys; directory/file modes are 700/600; port 22 is reachable |
+| Host key verification fails | `PROD_KNOWN_HOSTS` matches `PROD_HOST`; verify host identity before updating the secret |
+| `sudo: a password is required` | Sudoers command path and deploy username match the installed host tools |
+| nginx 502 | `systemctl status quakescope`, service logs, and localhost health on port 8081 |
+| nginx 403 / missing assets | `current` points to a release; nginx can traverse `/opt/quakescope` and read `web/index.html` and assets |
+| `Exec format error` | Host must be x86_64 for the current amd64 binary |
+| Source stale / no initial events | Server DNS, outbound HTTPS, provider status endpoint, and service logs |
+| Main deployment fails on missing secrets | Add all four secrets to environment `prod`, then rerun the failed main workflow |
+
+### Create a release manually (workstation)
+
+```sh
+git switch main
+git pull --ff-only
+git tag -a v0.1.0 -m 'QuakeScope v0.1.0'
+git push origin v0.1.0
+```
+
+Choose an unused version. A tag must point to a commit reachable from `main`; its workflow tests and builds that revision before publishing the archive and checksums. This does not deploy or create another tag.
