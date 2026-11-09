@@ -55,9 +55,13 @@ Filtering uses occurrence timestamps in UTC. Invalid filters return 400. Results
 
 Frontend query state is separate from Zustand interaction state. The R3F scene remains mounted when filters change. Orbit controls support mouse/touch, idle rotation, reset, and spherical camera fly-to paths. Surface markers use magnitude for radius and depth for color: amber below 70 km, coral from 70 to below 300 km, violet at 300 km or deeper. The DOM event list provides keyboard selection. The detail panel can collapse through its summary, including on mobile.
 
+The optional tectonic layer renders PB2002 boundary LineString and MultiLineString features through the existing globe's spherical path renderer. Coordinates are validated before use, paths sit slightly above the surface to prevent z-fighting, and boundaries remain pickable for their available plate, type, and source metadata. PB2002 is a published geological model, not a real-time measurement of plate motion.
+
 ## Attribution
 
 Earth imagery: NASA Visible Earth / Blue Marble, distributed as the equirectangular `2_no_clouds_4k.jpg` from [webgl-earth](https://github.com/turban/webgl-earth/tree/master/images). The image is bundled locally (about 1.3 MB); NASA imagery usage guidance: https://www.nasa.gov/nasa-brand-center/images-and-media/. No NASA affiliation is implied. Earthquake information: USGS and BMKG (Badan Meteorologi, Klimatologi, dan Geofisika).
+
+Tectonic boundaries: the locally bundled `PB2002_boundaries.json` from [fraxen/tectonicplates](https://github.com/fraxen/tectonicplates), based on Peter Bird (2003), “An updated digital model of plate boundaries,” Geochemistry, Geophysics, Geosystems. The dataset publication is dated 2003 and the repository distributes the collection under the [Open Data Commons Attribution License 1.0](https://opendatacommons.org/licenses/by/1.0/). Dataset snapshot: upstream commit `339b0c56563c118307b1f4542703047f5f698fae`.
 
 Data may be delayed or revised. This application is not an official earthquake early-warning system.
 

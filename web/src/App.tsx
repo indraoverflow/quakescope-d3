@@ -1,9 +1,359 @@
-import {Component,type ReactNode} from "react";
-import {useQuery} from "@tanstack/react-query";
+import { Component, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
 import Scene from "./Scene";
-import {useExplorer} from "./store";
-import {depthColor,type Event,type Status} from "./earthquake";
-type Response={events:Event[];total:number;returned:number;truncated:boolean;freshness:Status[]};
-async function get<T,>(path:string):Promise<T>{const r=await fetch(path);if(!r.ok)throw new Error(`Server returned ${r.status}`);return r.json();}
-class SceneBoundary extends Component<{children:ReactNode},{failed:boolean}>{state={failed:false};static getDerivedStateFromError(){return {failed:true};}render(){return this.state.failed?<p className="webgl-error">3D rendering unavailable. Explore real events in the list below.</p>:this.props.children;}}
-export default function App(){const s=useExplorer();const q=useQuery({queryKey:["earthquakes",s.source,s.timeRange,s.minMagnitude],queryFn:()=>get<Response>(`/api/v1/earthquakes?source=${s.source}&timeRange=${s.timeRange}&minMagnitude=${s.minMagnitude}&limit=1000`),refetchInterval:60000});const events=q.data?.events??[];const statuses=q.data?.freshness??[];const stale=statuses.some(x=>x.stale);const max=events.length?Math.max(...events.map(e=>e.magnitude)).toFixed(1):"—";const selected=s.selected;return <main><div className="scene"><SceneBoundary><Scene events={events}/></SceneBoundary></div><header><a className="brand" href="/">◉ <span>QUAKESCOPE<small>EARTH OBSERVATORY / 3D</small></span></a><div className="sync"><i className={stale||q.isError?"warn":""}/>{q.isPending?"CONNECTING":q.isError?"CONNECTION FAILED":stale?"SOURCE STALE":"SYNCHRONIZED"}</div><nav aria-label="Data source">{["all","usgs","bmkg"].map(x=><button key={x} aria-pressed={s.source===x} onClick={()=>s.set({source:x,selected:null})}>{x.toUpperCase()}</button>)}</nav></header><section className="intro"><p className="eyebrow">A PLANET IN MOTION</p><h1>Feel the pulse<br/>of Earth.</h1><p>Explore seismic activity across<br/>our ever-changing planet.</p></section><aside className="filters glass"><p className="eyebrow">EXPLORATION CONTROLS</p><label>Observation window</label><div className="segments">{["24h","7d"].map(x=><button key={x} aria-pressed={s.timeRange===x} onClick={()=>s.set({timeRange:x,selected:null})}>{x==="24h"?"Past 24 hours":"Past 7 days"}</button>)}</div><label>Minimum magnitude</label><div className="segments">{[2.5,4.5,6].map(x=><button key={x} aria-pressed={s.minMagnitude===x} onClick={()=>s.set({minMagnitude:x,selected:null})}>M {x.toFixed(1)}+</button>)}</div><label className="toggle"><input type="checkbox" checked={s.autoRotate} onChange={e=>s.set({autoRotate:e.target.checked})}/> Auto-rotate Earth</label><button className="reset" onClick={()=>s.set({reset:s.reset+1,selected:null})}>↺ Reset view</button></aside><section className="summary glass"><div><strong>{events.length}</strong><small>DISPLAYED EVENTS</small></div><div><strong>{max}<em> M</em></strong><small>MAX MAGNITUDE</small></div><div><strong>{events.length?(events.reduce((a,e)=>a+e.depthKm,0)/events.length).toFixed(0):"—"}<em> km</em></strong><small>AVG DEPTH</small></div></section><aside className="events glass"><p className="eyebrow">SEISMIC ACTIVITY <span>{s.timeRange.toUpperCase()}</span></p>{q.isPending&&<p role="status">Receiving observatory data…</p>}{q.isError&&<p role="alert">Unable to reach the backend. <button onClick={()=>q.refetch()}>Retry</button></p>}{!q.isPending&&!q.isError&&!events.length&&<p>No events match these filters. Sources may still be syncing.</p>}{q.data?.truncated&&<p>Showing {q.data.returned} of {q.data.total} matching events.</p>}{s.source!=="usgs"&&<p className="notice">BMKG publishes limited recent categories, not complete coverage of this time window. Sources may report the same event separately.</p>}<div className="event-list">{events.map(e=><button className="event" key={e.id} aria-pressed={selected?.id===e.id} onClick={()=>s.set({selected:e})}><b style={{color:depthColor(e.depthKm)}}>{e.magnitude.toFixed(1)}</b><span>{e.location}<small>{e.source.toUpperCase()} · {new Date(e.occurredAt).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})}</small></span><span>↗</span></button>)}</div></aside>{selected&&<aside className="details glass" aria-label="Earthquake details"><button className="close" aria-label="Close details" onClick={()=>s.set({selected:null})}>×</button><p className="eyebrow">SELECTED EPICENTER / {selected.source.toUpperCase()}</p><details open><summary><b style={{color:depthColor(selected.depthKm)}}>M {selected.magnitude.toFixed(1)}</b><h2>{selected.location}</h2></summary><dl><dt>Depth</dt><dd>{selected.depthKm} km</dd><dt>Occurred</dt><dd>{new Date(selected.occurredAt).toLocaleString()}<br/>{selected.occurredAt} UTC</dd><dt>Coordinates</dt><dd>{selected.latitude.toFixed(3)}°, {selected.longitude.toFixed(3)}°</dd></dl>{selected.felt&&<p>Felt: {selected.felt}</p>}{selected.tsunamiInformation&&<p>{selected.tsunamiInformation}</p>}{selected.detailUrl&&<a href={selected.detailUrl} target="_blank" rel="noreferrer">Official source ↗</a>}</details></aside>}<div className="legend"><p className="eyebrow">EPICENTER DEPTH</p><span style={{color:depthColor(0)}}>● &lt;70 km</span><span style={{color:depthColor(70)}}>● 70–299 km</span><span style={{color:depthColor(300)}}>● ≥300 km</span><small>Marker size indicates magnitude · Drag to orbit / scroll to zoom</small></div><footer><span>DATA: <a href="https://earthquake.usgs.gov">USGS</a> + <a href="https://data.bmkg.go.id/gempabumi/">BMKG</a> · IMAGERY: NASA BLUE MARBLE</span><span>Data may be delayed or revised. Not an early-warning system.</span><span>{statuses.map(x=>`${x.source.toUpperCase()}: ${x.lastSuccessfulSync?new Date(x.lastSuccessfulSync).toLocaleTimeString():"awaiting sync"}${x.stale?" (stale)":""}${x.error?" · "+x.error:""}`).join(" / ")}</span></footer></main>;}
+import { useExplorer } from "./store";
+import { depthColor, type Event, type Status } from "./earthquake";
+type Response = {
+  events: Event[];
+  total: number;
+  returned: number;
+  truncated: boolean;
+  freshness: Status[];
+};
+async function get<T>(path: string): Promise<T> {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error(`Server returned ${r.status}`);
+  return r.json();
+}
+class SceneBoundary extends Component<
+  { children: ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  render() {
+    return this.state.failed ? (
+      <p className="webgl-error">
+        3D rendering unavailable. Explore real events in the list below.
+      </p>
+    ) : (
+      this.props.children
+    );
+  }
+}
+export default function App() {
+  const s = useExplorer();
+  const q = useQuery({
+    queryKey: ["earthquakes", s.source, s.timeRange, s.minMagnitude],
+    queryFn: () =>
+      get<Response>(
+        `/api/v1/earthquakes?source=${s.source}&timeRange=${s.timeRange}&minMagnitude=${s.minMagnitude}&limit=1000`,
+      ),
+    refetchInterval: 60000,
+  });
+  const events = q.data?.events ?? [];
+  const statuses = q.data?.freshness ?? [];
+  const stale = statuses.some((x) => x.stale);
+  const max = events.length
+    ? Math.max(...events.map((e) => e.magnitude)).toFixed(1)
+    : "—";
+  const selected = s.selected;
+  const boundary = s.selectedBoundary;
+  return (
+    <main>
+      <div className="scene">
+        <SceneBoundary>
+          <Scene events={events} />
+        </SceneBoundary>
+      </div>
+      <header>
+        <a className="brand" href="/">
+          ◉{" "}
+          <span>
+            QUAKESCOPE<small>EARTH OBSERVATORY / 3D</small>
+          </span>
+        </a>
+        <div className="sync">
+          <i className={stale || q.isError ? "warn" : ""} />
+          {q.isPending
+            ? "CONNECTING"
+            : q.isError
+              ? "CONNECTION FAILED"
+              : stale
+                ? "SOURCE STALE"
+                : "SYNCHRONIZED"}
+        </div>
+        <nav aria-label="Data source">
+          {["all", "usgs", "bmkg"].map((x) => (
+            <button
+              key={x}
+              aria-pressed={s.source === x}
+              onClick={() => s.set({ source: x, selected: null })}
+            >
+              {x.toUpperCase()}
+            </button>
+          ))}
+        </nav>
+      </header>
+      <section className="intro">
+        <p className="eyebrow">A PLANET IN MOTION</p>
+        <h1>
+          Feel the pulse
+          <br />
+          of Earth.
+        </h1>
+        <p>
+          Explore seismic activity across
+          <br />
+          our ever-changing planet.
+        </p>
+      </section>
+      <aside className="filters glass">
+        <p className="eyebrow">EXPLORATION CONTROLS</p>
+        <label>Observation window</label>
+        <div className="segments">
+          {["24h", "7d"].map((x) => (
+            <button
+              key={x}
+              aria-pressed={s.timeRange === x}
+              onClick={() => s.set({ timeRange: x, selected: null })}
+            >
+              {x === "24h" ? "Past 24 hours" : "Past 7 days"}
+            </button>
+          ))}
+        </div>
+        <label>Minimum magnitude</label>
+        <div className="segments">
+          {[2.5, 4.5, 6].map((x) => (
+            <button
+              key={x}
+              aria-pressed={s.minMagnitude === x}
+              onClick={() => s.set({ minMagnitude: x, selected: null })}
+            >
+              M {x.toFixed(1)}+
+            </button>
+          ))}
+        </div>
+        <label className="toggle">
+          <input
+            type="checkbox"
+            checked={s.tectonicPlates}
+            onChange={(e) =>
+              s.set({
+                tectonicPlates: e.target.checked,
+                selectedBoundary: e.target.checked ? boundary : null,
+              })
+            }
+          />{" "}
+          Tectonic boundaries
+        </label>
+        <label className="toggle">
+          <input
+            type="checkbox"
+            checked={s.autoRotate}
+            onChange={(e) => s.set({ autoRotate: e.target.checked })}
+          />{" "}
+          Auto-rotate Earth
+        </label>
+        <button
+          className="reset"
+          onClick={() => s.set({ reset: s.reset + 1, selected: null })}
+        >
+          ↺ Reset view
+        </button>
+      </aside>
+      <section className="summary glass">
+        <div>
+          <strong>{events.length}</strong>
+          <small>DISPLAYED EVENTS</small>
+        </div>
+        <div>
+          <strong>
+            {max}
+            <em> M</em>
+          </strong>
+          <small>MAX MAGNITUDE</small>
+        </div>
+        <div>
+          <strong>
+            {events.length
+              ? (
+                  events.reduce((a, e) => a + e.depthKm, 0) / events.length
+                ).toFixed(0)
+              : "—"}
+            <em> km</em>
+          </strong>
+          <small>AVG DEPTH</small>
+        </div>
+      </section>
+      <aside className="events glass">
+        <p className="eyebrow">
+          SEISMIC ACTIVITY <span>{s.timeRange.toUpperCase()}</span>
+        </p>
+        {q.isPending && <p role="status">Receiving observatory data…</p>}
+        {q.isError && (
+          <p role="alert">
+            Unable to reach the backend.{" "}
+            <button onClick={() => q.refetch()}>Retry</button>
+          </p>
+        )}
+        {s.tectonicError && (
+          <p className="notice" role="status">
+            {s.tectonicError} Earthquake monitoring remains available.
+          </p>
+        )}
+        {!q.isPending && !q.isError && !events.length && (
+          <p>No events match these filters. Sources may still be syncing.</p>
+        )}
+        {q.data?.truncated && (
+          <p>
+            Showing {q.data.returned} of {q.data.total} matching events.
+          </p>
+        )}
+        {s.source !== "usgs" && (
+          <p className="notice">
+            BMKG publishes limited recent categories, not complete coverage of
+            this time window. Sources may report the same event separately.
+          </p>
+        )}
+        <div className="event-list">
+          {events.map((e) => (
+            <button
+              className="event"
+              key={e.id}
+              aria-pressed={selected?.id === e.id}
+              onClick={() => s.set({ selected: e })}
+            >
+              <b style={{ color: depthColor(e.depthKm) }}>
+                {e.magnitude.toFixed(1)}
+              </b>
+              <span>
+                {e.location}
+                <small>
+                  {e.source.toUpperCase()} ·{" "}
+                  {new Date(e.occurredAt).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </small>
+              </span>
+              <span>↗</span>
+            </button>
+          ))}
+        </div>
+      </aside>
+      {selected && (
+        <aside className="details glass" aria-label="Earthquake details">
+          <button
+            className="close"
+            aria-label="Close details"
+            onClick={() => s.set({ selected: null })}
+          >
+            ×
+          </button>
+          <p className="eyebrow">
+            SELECTED EPICENTER / {selected.source.toUpperCase()}
+          </p>
+          <details open>
+            <summary>
+              <b style={{ color: depthColor(selected.depthKm) }}>
+                M {selected.magnitude.toFixed(1)}
+              </b>
+              <h2>{selected.location}</h2>
+            </summary>
+            <dl>
+              <dt>Depth</dt>
+              <dd>{selected.depthKm} km</dd>
+              <dt>Occurred</dt>
+              <dd>
+                {new Date(selected.occurredAt).toLocaleString()}
+                <br />
+                {selected.occurredAt} UTC
+              </dd>
+              <dt>Coordinates</dt>
+              <dd>
+                {selected.latitude.toFixed(3)}°, {selected.longitude.toFixed(3)}
+                °
+              </dd>
+            </dl>
+            {selected.felt && <p>Felt: {selected.felt}</p>}
+            {selected.tsunamiInformation && (
+              <p>{selected.tsunamiInformation}</p>
+            )}
+            {selected.detailUrl && (
+              <a href={selected.detailUrl} target="_blank" rel="noreferrer">
+                Official source ↗
+              </a>
+            )}
+          </details>
+        </aside>
+      )}
+      {boundary && (
+        <aside className="details glass" aria-label="Tectonic boundary details">
+          <button
+            className="close"
+            aria-label="Close boundary details"
+            onClick={() => s.set({ selectedBoundary: null })}
+          >
+            ×
+          </button>
+          <p className="eyebrow">SELECTED TECTONIC BOUNDARY / PB2002</p>
+          <h2>{boundary.name || "Unnamed boundary"}</h2>
+          <dl>
+            {boundary.plateA && (
+              <>
+                <dt>Plate A</dt>
+                <dd>{boundary.plateA}</dd>
+              </>
+            )}
+            {boundary.plateB && (
+              <>
+                <dt>Plate B</dt>
+                <dd>{boundary.plateB}</dd>
+              </>
+            )}
+            {boundary.type && (
+              <>
+                <dt>Type</dt>
+                <dd>{boundary.type}</dd>
+              </>
+            )}
+            {boundary.source && (
+              <>
+                <dt>Source</dt>
+                <dd>{boundary.source}</dd>
+              </>
+            )}
+          </dl>
+          <p className="model-note">
+            Published geological model; not a real-time measurement of plate
+            motion.
+          </p>
+        </aside>
+      )}
+      <div className="legend">
+        <p className="eyebrow">EPICENTER DEPTH</p>
+        <span style={{ color: depthColor(0) }}>● &lt;70 km</span>
+        <span style={{ color: depthColor(70) }}>● 70–299 km</span>
+        <span style={{ color: depthColor(300) }}>● ≥300 km</span>
+        {s.tectonicPlates && <span className="tectonic-key">━ PLATE BOUNDARY</span>}
+        <small>
+          Marker size indicates magnitude · Drag to orbit / scroll to zoom
+        </small>
+      </div>
+      <footer>
+        <span>
+          DATA: <a href="https://earthquake.usgs.gov">USGS</a> +{" "}
+          <a href="https://data.bmkg.go.id/gempabumi/">BMKG</a> · TECTONICS:{" "}
+          <a href="https://github.com/fraxen/tectonicplates">
+            PB2002 / Bird 2003
+          </a>{" "}
+          · IMAGERY: NASA BLUE MARBLE
+        </span>
+        <span>
+          Data may be delayed or revised. Not an early-warning system.
+        </span>
+        <span>
+          {statuses
+            .map(
+              (x) =>
+                `${x.source.toUpperCase()}: ${x.lastSuccessfulSync ? new Date(x.lastSuccessfulSync).toLocaleTimeString() : "awaiting sync"}${x.stale ? " (stale)" : ""}${x.error ? " · " + x.error : ""}`,
+            )
+            .join(" / ")}
+        </span>
+      </footer>
+    </main>
+  );
+}
