@@ -1,16 +1,18 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"log/slog"
 	"net/http"
 	"quakescope/server/internal/quake"
 	"strconv"
 	"time"
 )
 
-func Handler(cache *quake.Cache) http.Handler {
+func Handler(cache *quake.Cache, historyServices ...*quake.HistoryService) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 	write := func(w http.ResponseWriter, status int, v any) {
@@ -63,5 +65,24 @@ func Handler(cache *quake.Cache) http.Handler {
 		}
 		write(w, 200, map[string]any{"events": events, "total": total, "returned": len(events), "truncated": total > limit, "filters": map[string]any{"source": source, "timeRange": tr, "minMagnitude": min, "limit": limit}, "freshness": status})
 	})
+	if len(historyServices) > 0 && historyServices[0] != nil {
+		history := historyServices[0]
+		r.Get("/api/v1/earthquakes/history", func(w http.ResponseWriter, r *http.Request) {
+			query, err := quake.ParseHistoryQuery(r.URL.Query(), time.Now().UTC())
+			if err != nil {
+				write(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			ctx, cancel := context.WithTimeout(r.Context(), 13*time.Second)
+			defer cancel()
+			result, err := history.Query(ctx, query)
+			if err != nil {
+				slog.Warn("historical provider request failed", "error", err)
+				write(w, http.StatusBadGateway, map[string]string{"error": "USGS historical catalog is temporarily unavailable"})
+				return
+			}
+			write(w, http.StatusOK, result)
+		})
+	}
 	return r
 }

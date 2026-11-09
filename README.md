@@ -60,13 +60,16 @@ Serve `web/dist` through a static web server and reverse proxy `/api` to Go for 
 
 The single Go process runs one polling goroutine per provider every four minutes. Adapters normalize bounded HTTP responses; a mutex protects atomic provider snapshots. If any feed in a provider poll fails, that provider retains its previous successful snapshot and reports the error. Restarting clears memory. HTTP client timeouts, request cancellation, response size limits, and graceful shutdown are included.
 
+Time Machine requests are separate from live polling. The backend queries the USGS FDSN catalog for at most 31 days and 1,500 returned events, checks the catalog count endpoint for truncation, and keeps successful query results in a concurrency-safe five-minute memory cache. The frontend cancels obsolete range requests, sorts by UTC occurrence time and stable event ID, and uses a single frame-delta playback loop plus binary search to reveal accumulated events. At 1×, the selected historical range is visualized in two minutes; 5× and 10× are visualization multipliers rather than wall-clock simulation rates.
+
 - `GET /api/v1/earthquakes?source=usgs&timeRange=24h&minMagnitude=2.5&limit=1000` returns events, matching totals, truncation, filters, and provider freshness.
+- `GET /api/v1/earthquakes/history?start=2026-11-01T00:00:00Z&end=2026-11-08T00:00:00Z&minMagnitude=4&limit=1500` returns chronological USGS catalog events, attribution, totals, and an explicit truncation warning.
 - `GET /api/v1/sources/status` returns provider sync timestamps, stale state, and errors.
 - `GET /api/v1/health` reports process health (not upstream availability).
 
 Filtering uses occurrence timestamps in UTC. Invalid filters return 400. Results are newest first, capped at 1000. Summaries describe displayed records. Source status becomes stale on failure or after ten minutes without success.
 
-[USGS GeoJSON feeds](https://earthquake.usgs.gov/earthquakes/feed/v1.0/) supply magnitude 2.5 day and week records. Coordinates are longitude, latitude, depth. USGS event IDs are preserved. The tsunami flag retains its USGS meaning and is not presented as a warning.
+[USGS GeoJSON feeds](https://earthquake.usgs.gov/earthquakes/feed/v1.0/) supply magnitude 2.5 day and week records for Live Mode. The [USGS FDSN Event Web Service](https://earthquake.usgs.gov/fdsnws/event/1/) supplies historical Time Machine queries. Coordinates are longitude, latitude, depth. USGS event IDs and source links are preserved. The tsunami flag retains its USGS meaning and is not presented as a warning.
 
 [BMKG open data](https://data.bmkg.go.id/gempabumi/) supplies `autogempa.json`, `gempaterkini.json`, and `gempadirasakan.json`. Coordinates are latitude, longitude; ISO DateTime values normalize to UTC. BMKG provides latest, M5+, and felt categories with limited recent records, not exhaustive 24-hour or seven-day coverage. Polling uses three requests per four minutes, below its documented 60/minute limit. BMKG timestamps provide the within-provider event identity because these feeds lack a stable event ID; simultaneous distinct events cannot be distinguished. Original felt and potential-tsunami text is preserved. No cross-provider deduplication is attempted.
 

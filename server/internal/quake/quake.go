@@ -230,8 +230,6 @@ func Fetch(ctx context.Context, client *http.Client, url string, parse func([]by
 		return nil, fmt.Errorf("upstream response too large")
 	}
 	events, err := parse(b)
-	if err == nil && len(events) == 0 {
-		return nil, fmt.Errorf("upstream contained no valid events")
-	}
+	// A valid empty FeatureCollection is expected for quiet historical periods.
 	return events, err
 }

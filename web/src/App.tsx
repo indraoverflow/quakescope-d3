@@ -1,8 +1,9 @@
-import { Component, type ReactNode } from "react";
+import { Component, type ReactNode, useEffect, useMemo, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Scene from "./Scene";
 import { useExplorer } from "./store";
 import { depthColor, type Event, type Status } from "./earthquake";
+import { advanceTime, rangeForPreset, sortChronologically, visibleEventCount } from "./timeline";
 type Response = {
   events: Event[];
   total: number;
@@ -10,10 +11,29 @@ type Response = {
   truncated: boolean;
   freshness: Status[];
 };
-async function get<T>(path: string): Promise<T> {
-  const r = await fetch(path);
+type HistoryResponse = Response & { source: string; attribution: string; suggestion?: string };
+async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const r = await fetch(path, { signal });
   if (!r.ok) throw new Error(`Server returned ${r.status}`);
   return r.json();
+}
+function usePlayback() {
+  const mode = useExplorer((x) => x.mode), playing = useExplorer((x) => x.isPlaying);
+  const frame = useRef<number | null>(null), previous = useRef<number | null>(null);
+  useEffect(() => {
+    if (mode !== "replay" || !playing) { previous.current = null; return; }
+    const tick = (now: number) => {
+      if (previous.current !== null) {
+        const state = useExplorer.getState();
+        const next = advanceTime(state.currentTime, state.replayStart, state.replayEnd, state.playbackSpeed, Math.min(now - previous.current, 250));
+        state.set({ currentTime: next.currentTime, isPlaying: !next.complete });
+      }
+      previous.current = now;
+      frame.current = requestAnimationFrame(tick);
+    };
+    frame.current = requestAnimationFrame(tick);
+    return () => { if (frame.current !== null) cancelAnimationFrame(frame.current); previous.current = null; };
+  }, [mode, playing]);
 }
 class SceneBoundary extends Component<
   { children: ReactNode },
@@ -35,17 +55,36 @@ class SceneBoundary extends Component<
 }
 export default function App() {
   const s = useExplorer();
-  const q = useQuery({
+  usePlayback();
+  const live = useQuery({
     queryKey: ["earthquakes", s.source, s.timeRange, s.minMagnitude],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       get<Response>(
         `/api/v1/earthquakes?source=${s.source}&timeRange=${s.timeRange}&minMagnitude=${s.minMagnitude}&limit=1000`,
+        signal,
       ),
-    refetchInterval: 60000,
+    refetchInterval: s.mode === "live" ? 60000 : false,
+    enabled: s.mode === "live",
   });
-  const events = q.data?.events ?? [];
-  const statuses = q.data?.freshness ?? [];
-  const stale = statuses.some((x) => x.stale);
+  const history = useQuery({
+    queryKey: ["history", s.replayStart, s.replayEnd, s.replayMagnitude],
+    queryFn: ({ signal }) => get<HistoryResponse>(`/api/v1/earthquakes/history?start=${encodeURIComponent(s.replayStart)}&end=${encodeURIComponent(s.replayEnd)}&minMagnitude=${s.replayMagnitude}&limit=1500`, signal),
+    enabled: s.mode === "replay",
+    retry: 1,
+  });
+  useEffect(() => {
+    if (s.mode !== "replay" || !history.data) return;
+    const replayEvents = sortChronologically(history.data.events);
+    s.set({ replayEvents, currentTime: s.replayStart, isPlaying: replayEvents.length > 0, selected: null });
+  }, [history.data, s.mode, s.replayStart, s.set]);
+  const visibleCount = useMemo(() => visibleEventCount(s.replayEvents, s.currentTime), [s.replayEvents, s.currentTime]);
+  const events = s.mode === "replay" ? s.replayEvents.slice(0, visibleCount) : (live.data?.events ?? []);
+  useEffect(() => {
+    if (s.mode === "replay" && s.selected && Date.parse(s.selected.occurredAt) > Date.parse(s.currentTime)) s.set({ selected: null });
+  }, [s.currentTime, s.mode, s.selected, s.set]);
+  const activeQuery = s.mode === "live" ? live : history;
+  const statuses = live.data?.freshness ?? [];
+  const stale = s.mode === "live" && statuses.some((x) => x.stale);
   const max = events.length
     ? Math.max(...events.map((e) => e.magnitude)).toFixed(1)
     : "—";
@@ -66,17 +105,19 @@ export default function App() {
           </span>
         </a>
         <div className="sync">
-          <i className={stale || q.isError ? "warn" : ""} />
-          {q.isPending
+          <i className={stale || activeQuery.isError ? "warn" : ""} />
+          {activeQuery.isPending
             ? "CONNECTING"
-            : q.isError
+            : activeQuery.isError
               ? "CONNECTION FAILED"
               : stale
                 ? "SOURCE STALE"
                 : "SYNCHRONIZED"}
         </div>
-        <nav aria-label="Data source">
-          {["all", "usgs", "bmkg"].map((x) => (
+        <nav aria-label="Mode and data source">
+          <button aria-pressed={s.mode === "live"} onClick={() => s.set({ mode: "live", isPlaying: false, selected: null })}>LIVE</button>
+          <button aria-pressed={s.mode === "replay"} onClick={() => { const r = rangeForPreset("24h"); s.set({ mode: "replay", replayPreset: "24h", replayStart: r.startTime, replayEnd: r.endTime, replayMagnitude: r.minMagnitude, currentTime: r.startTime, isPlaying: false, selected: null }); }}>TIME MACHINE</button>
+          {s.mode === "live" && ["all", "usgs", "bmkg"].map((x) => (
             <button
               key={x}
               aria-pressed={s.source === x}
@@ -102,6 +143,7 @@ export default function App() {
       </section>
       <aside className="filters glass">
         <p className="eyebrow">EXPLORATION CONTROLS</p>
+        {s.mode === "live" ? <>
         <label>Observation window</label>
         <div className="segments">
           {["24h", "7d"].map((x) => (
@@ -117,15 +159,19 @@ export default function App() {
         <label>Minimum magnitude</label>
         <div className="segments">
           {[2.5, 4.5, 6].map((x) => (
-            <button
-              key={x}
-              aria-pressed={s.minMagnitude === x}
-              onClick={() => s.set({ minMagnitude: x, selected: null })}
-            >
-              M {x.toFixed(1)}+
-            </button>
+            <button key={x} aria-pressed={s.minMagnitude === x} onClick={() => s.set({ minMagnitude: x, selected: null })}>M {x.toFixed(1)}+</button>
           ))}
         </div>
+        </> : <>
+          <label>Historical preset</label>
+          <div className="segments">
+            {(["24h", "7d", "30d"] as const).map((preset) => <button key={preset} aria-pressed={s.replayPreset === preset} onClick={() => { const r = rangeForPreset(preset); s.set({ replayPreset: preset, replayStart: r.startTime, replayEnd: r.endTime, replayMagnitude: r.minMagnitude, currentTime: r.startTime, isPlaying: false, selected: null }); }}>{preset}</button>)}
+          </div>
+          <label>Historical minimum magnitude</label>
+          <div className="segments">
+            {[2.5, 4, 4.5, 6].map((m) => <button key={m} aria-pressed={s.replayMagnitude === m} onClick={() => s.set({ replayMagnitude: m, isPlaying: false, selected: null })}>M {m}+</button>)}
+          </div>
+        </>}
         <label className="toggle">
           <input
             type="checkbox"
@@ -180,13 +226,13 @@ export default function App() {
       </section>
       <aside className="events glass">
         <p className="eyebrow">
-          SEISMIC ACTIVITY <span>{s.timeRange.toUpperCase()}</span>
+          SEISMIC ACTIVITY <span>{s.mode === "replay" ? "USGS HISTORY" : s.timeRange.toUpperCase()}</span>
         </p>
-        {q.isPending && <p role="status">Receiving observatory data…</p>}
-        {q.isError && (
+        {activeQuery.isPending && <p role="status">Receiving observatory data…</p>}
+        {activeQuery.isError && (
           <p role="alert">
             Unable to reach the backend.{" "}
-            <button onClick={() => q.refetch()}>Retry</button>
+            <button onClick={() => activeQuery.refetch()}>Retry</button>
           </p>
         )}
         {s.tectonicError && (
@@ -194,15 +240,15 @@ export default function App() {
             {s.tectonicError} Earthquake monitoring remains available.
           </p>
         )}
-        {!q.isPending && !q.isError && !events.length && (
-          <p>No events match these filters. Sources may still be syncing.</p>
+        {!activeQuery.isPending && !activeQuery.isError && !(s.mode === "replay" ? s.replayEvents : events).length && (
+          <p>No events match these filters.</p>
         )}
-        {q.data?.truncated && (
+        {(s.mode === "replay" ? history.data : live.data)?.truncated && (
           <p>
-            Showing {q.data.returned} of {q.data.total} matching events.
+            Showing {(s.mode === "replay" ? history.data : live.data)?.returned} of {(s.mode === "replay" ? history.data : live.data)?.total} matching events. {history.data?.suggestion}
           </p>
         )}
-        {s.source !== "usgs" && (
+        {s.mode === "live" && s.source !== "usgs" && (
           <p className="notice">
             BMKG publishes limited recent categories, not complete coverage of
             this time window. Sources may report the same event separately.
@@ -214,7 +260,7 @@ export default function App() {
               className="event"
               key={e.id}
               aria-pressed={selected?.id === e.id}
-              onClick={() => s.set({ selected: e })}
+              onClick={() => s.set({ selected: e, isPlaying: s.mode === "replay" ? false : s.isPlaying })}
             >
               <b style={{ color: depthColor(e.depthKm) }}>
                 {e.magnitude.toFixed(1)}
@@ -322,6 +368,22 @@ export default function App() {
             motion.
           </p>
         </aside>
+      )}
+      {s.mode === "replay" && (
+        <section className="timeline glass" aria-label="Earthquake time machine controls">
+          <div className="timeline-head">
+            <span className="eyebrow">EARTHQUAKE TIME MACHINE · USGS CATALOG</span>
+            <button onClick={() => s.set({ mode: "live", isPlaying: false, selected: null })}>EXIT TO LIVE</button>
+          </div>
+          <div className="timeline-controls">
+            <button aria-label={s.isPlaying ? "Pause replay" : "Play replay"} disabled={history.isPending || !s.replayEvents.length} onClick={() => s.set({ isPlaying: !s.isPlaying, currentTime: !s.isPlaying && Date.parse(s.currentTime) >= Date.parse(s.replayEnd) ? s.replayStart : s.currentTime })}>{s.isPlaying ? "Ⅱ" : "▶"}</button>
+            <button aria-label="Restart replay" onClick={() => s.set({ currentTime: s.replayStart, isPlaying: false, selected: null })}>↺</button>
+            <time>{new Date(s.currentTime).toISOString().replace(".000", "")}</time>
+            <div className="speed" aria-label="Playback speed">{([1, 5, 10] as const).map((speed) => <button key={speed} aria-pressed={s.playbackSpeed === speed} onClick={() => s.set({ playbackSpeed: speed })}>{speed}×</button>)}</div>
+          </div>
+          <input className="timeline-slider" aria-label="Simulated UTC time" type="range" min="0" max="1000" value={Math.round(1000 * (Date.parse(s.currentTime) - Date.parse(s.replayStart)) / Math.max(1, Date.parse(s.replayEnd) - Date.parse(s.replayStart)))} onChange={(e) => { const ratio = Number(e.target.value) / 1000; const next = new Date(Date.parse(s.replayStart) + ratio * (Date.parse(s.replayEnd) - Date.parse(s.replayStart))).toISOString(); s.set({ currentTime: next, isPlaying: false }); }} />
+          <div className="timeline-range"><time>{new Date(s.replayStart).toISOString().slice(0, 16).replace("T", " ")} UTC</time><span>{visibleCount} / {s.replayEvents.length} events · speed compresses the selected range into a two-minute 1× visualization</span><time>{new Date(s.replayEnd).toISOString().slice(0, 16).replace("T", " ")} UTC</time></div>
+        </section>
       )}
       <div className="legend">
         <p className="eyebrow">EPICENTER DEPTH</p>

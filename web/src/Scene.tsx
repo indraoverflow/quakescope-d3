@@ -9,6 +9,8 @@ import {
   Object3D,
   Color,
   AdditiveBlending,
+  Mesh,
+  MeshBasicMaterial,
 } from "three";
 import type { OrbitControls as Controls } from "three-stdlib";
 import { depthColor, markerSize, position, type Event } from "./earthquake";
@@ -79,13 +81,16 @@ function Halos({ events }: { events: Event[] }) {
     if (!ref.current) return;
     const obj = new Object3D();
     const color = new Color();
+    const times = events.map((event) => Date.parse(event.occurredAt));
+    const newest = times.length ? Math.max(...times) : 0;
+    const oldest = times.length ? Math.min(...times) : newest;
+    const recentWindow = Math.max(60_000, (newest - oldest) * 0.12);
     events.forEach((e, i) => {
       obj.position
         .set(...position(e.latitude, e.longitude))
         .multiplyScalar(1.004);
-      obj.scale.setScalar(
-        markerSize(e.magnitude) * (e.id === selected ? 3 : 1.6),
-      );
+      const recent = newest - Date.parse(e.occurredAt) <= recentWindow;
+      obj.scale.setScalar(markerSize(e.magnitude) * (e.id === selected ? 3 : recent ? 1.8 : 1.15));
       obj.updateMatrix();
       ref.current!.setMatrixAt(i, obj.matrix);
       ref.current!.setColorAt(i, color.set(depthColor(e.depthKm)));
@@ -109,6 +114,23 @@ function Halos({ events }: { events: Event[] }) {
       />
     </instancedMesh>
   );
+}
+function EventPulse({ event }: { event?: Event }) {
+  const ref = useRef<Mesh>(null);
+  const started = useRef<number | null>(null);
+  const reduced = typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  useFrame(({ clock }) => {
+    if (!ref.current || reduced) return;
+    if (started.current === null) started.current = clock.getElapsedTime();
+    const phase = Math.min(1, (clock.getElapsedTime() - started.current) / 1.4);
+    ref.current.scale.setScalar(1 + phase * 3);
+    (ref.current.material as MeshBasicMaterial).opacity = (1 - phase) * 0.35;
+  });
+  if (!event) return null;
+  return <mesh ref={ref} position={position(event.latitude, event.longitude).map((v) => v * 1.005) as [number, number, number]} scale={markerSize(event.magnitude) * 1.6}>
+    <sphereGeometry args={[1, 16, 10]} />
+    <meshBasicMaterial color={depthColor(event.depthKm)} transparent opacity={0.35} depthWrite={false} blending={AdditiveBlending} />
+  </mesh>;
 }
 function Earth({ events }: { events: Event[] }) {
   const [hover, setHover] = useState<string | null>(null);
@@ -185,7 +207,7 @@ function Earth({ events }: { events: Event[] }) {
         if (layer === "path")
           set({ selectedBoundary: d as BoundaryPath, selected: null });
         else if ("sourceId" in d)
-          set({ selected: d as Event, selectedBoundary: null });
+          set({ selected: d as Event, selectedBoundary: null, isPlaying: false });
       }}
       onHover={(layer: string | undefined, d: object | undefined) => {
         setHover(d && "sourceId" in d ? String((d as Event).id) : null);
@@ -224,6 +246,7 @@ export default function Scene({ events }: { events: Event[] }) {
       <Suspense fallback={null}>
         <Earth events={events} />
         <Halos events={events} />
+        <EventPulse key={events.at(-1)?.id ?? "none"} event={events.at(-1)} />
       </Suspense>
       <Camera />
     </Canvas>

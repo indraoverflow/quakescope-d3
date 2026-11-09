@@ -18,6 +18,7 @@ func main() {
 	defer stop()
 	cache := quake.NewCache()
 	client := &http.Client{Timeout: 20 * time.Second}
+	history := quake.NewHistoryService(&http.Client{Timeout: 12 * time.Second}, "https://earthquake.usgs.gov/fdsnws/event/1/query", 5*time.Minute)
 	for _, source := range []string{"usgs", "bmkg"} {
 		go func(source string) {
 			poll := func() {
@@ -61,7 +62,7 @@ func main() {
 	if addr == "" {
 		addr = "127.0.0.1:8081"
 	}
-	srv := &http.Server{Addr: addr, Handler: api.Handler(cache), ReadHeaderTimeout: 5 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: api.Handler(cache, history), ReadHeaderTimeout: 5 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 	go func() {
 		slog.Info("server listening", "address", addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
