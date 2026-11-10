@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { Event } from "./earthquake";
 import type { BoundaryPath } from "./tectonics";
+import type { DepthScale } from "./interior";
 type State = {
   mode: "live" | "replay";
   source: string;
@@ -9,6 +10,9 @@ type State = {
   autoRotate: boolean;
   tectonicPlates: boolean;
   tectonicError: string | null;
+  equator: boolean;
+  interiorMode: boolean;
+  depthScale: DepthScale;
   selected: Event | null;
   selectedBoundary: BoundaryPath | null;
   reset: number;
@@ -32,6 +36,9 @@ export const useExplorer = create<State & { set: (v: Partial<State>) => void }>(
     autoRotate: true,
     tectonicPlates: true,
     tectonicError: null,
+    equator: false,
+    interiorMode: false,
+    depthScale: "true",
     selected: null,
     selectedBoundary: null,
     reset: 0,

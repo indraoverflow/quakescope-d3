@@ -1,6 +1,6 @@
 import { Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { OrbitControls, Stars } from "@react-three/drei";
+import { Html, Line, OrbitControls, Stars } from "@react-three/drei";
 import Globe from "r3f-globe";
 import {
   Vector3,
@@ -11,11 +11,14 @@ import {
   AdditiveBlending,
   Mesh,
   MeshBasicMaterial,
+  MeshPhongMaterial,
 } from "three";
 import type { OrbitControls as Controls } from "three-stdlib";
 import { depthColor, markerSize, position, type Event } from "./earthquake";
 import { useExplorer } from "./store";
 import { loadBoundaries, type BoundaryPath } from "./tectonics";
+import { hypocenterPosition } from "./interior";
+import { equatorPoints } from "./equator";
 function Camera() {
   const controls = useRef<Controls>(null);
   const { camera } = useThree();
@@ -132,6 +135,47 @@ function EventPulse({ event }: { event?: Event }) {
     <meshBasicMaterial color={depthColor(event.depthKm)} transparent opacity={0.35} depthWrite={false} blending={AdditiveBlending} />
   </mesh>;
 }
+function InteriorFocus() {
+  const enabled = useExplorer((s) => s.interiorMode);
+  const scale = useExplorer((s) => s.depthScale);
+  const selected = useExplorer((s) => s.selected);
+  const [hovered, setHovered] = useState(false);
+  if (!enabled || !selected) return null;
+  const hypocenter = hypocenterPosition(selected.latitude, selected.longitude, selected.depthKm, scale);
+  if (!hypocenter) return null;
+  const epicenter = position(selected.latitude, selected.longitude);
+  const color = depthColor(selected.depthKm);
+  return <group>
+    <Line points={[hypocenter, epicenter]} color={color} lineWidth={1} transparent opacity={0.72} depthTest={false} raycast={() => null} renderOrder={9} />
+    <mesh
+      position={hypocenter}
+      scale={hovered ? 1.35 : 1}
+      renderOrder={10}
+      onPointerOver={(event) => { event.stopPropagation(); setHovered(true); document.body.style.cursor = "pointer"; }}
+      onPointerOut={() => { setHovered(false); document.body.style.cursor = "auto"; }}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <sphereGeometry args={[1.45, 18, 12]} />
+      <meshBasicMaterial color={color} depthTest={false} />
+    </mesh>
+    <mesh position={hypocenter} scale={hovered ? 3.2 : 2.45} renderOrder={9} raycast={() => {}}>
+      <sphereGeometry args={[1, 16, 10]} />
+      <meshBasicMaterial color={color} transparent opacity={0.2} depthWrite={false} depthTest={false} blending={AdditiveBlending} />
+    </mesh>
+  </group>;
+}
+const EQUATOR_POINTS = equatorPoints();
+function EquatorLayer() {
+  const visible = useExplorer((s) => s.equator);
+  if (!visible) return null;
+  return <group>
+    <Line points={EQUATOR_POINTS} color="#bcefff" lineWidth={1} dashed dashSize={2.2} gapSize={1.4} transparent opacity={0.7} depthWrite={false} />
+    <Line points={EQUATOR_POINTS} color="#42d9ff" lineWidth={3} transparent opacity={0.09} depthWrite={false} raycast={() => null} />
+    <Html position={position(0, 0).map((value) => value * 1.018) as [number, number, number]} center occlude transform distanceFactor={170}>
+      <span className="equator-label">EQUATOR — 0° LATITUDE</span>
+    </Html>
+  </group>;
+}
 function Earth({ events }: { events: Event[] }) {
   const [hover, setHover] = useState<string | null>(null);
   const [hoveredBoundary, setHoveredBoundary] = useState<string | null>(null);
@@ -140,6 +184,21 @@ function Earth({ events }: { events: Event[] }) {
   const selected = useExplorer((s) => s.selected);
   const selectedBoundary = useExplorer((s) => s.selectedBoundary);
   const set = useExplorer((s) => s.set);
+  const interior = useExplorer((s) => s.interiorMode);
+  const globeMaterial = useRef(new MeshPhongMaterial());
+  useEffect(() => {
+    const material = globeMaterial.current;
+    material.transparent = interior;
+    material.opacity = interior ? 0.34 : 1;
+    material.depthWrite = !interior;
+    material.needsUpdate = true;
+  }, [interior]);
+  useFrame((_, delta) => {
+    const material = globeMaterial.current;
+    const target = interior ? 0.34 : 1;
+    material.opacity += (target - material.opacity) * Math.min(1, delta * 7);
+  });
+  useEffect(() => () => globeMaterial.current.dispose(), []);
   useEffect(() => {
     let active = true;
     loadBoundaries()
@@ -168,6 +227,7 @@ function Earth({ events }: { events: Event[] }) {
   return (
     <Globe
       globeImageUrl="/earth.jpg"
+      globeMaterial={globeMaterial.current}
       atmosphereColor="#59c8ff"
       atmosphereAltitude={0.12}
       globeCurvatureResolution={3}
@@ -218,6 +278,7 @@ function Earth({ events }: { events: Event[] }) {
   );
 }
 export default function Scene({ events }: { events: Event[] }) {
+  const interior = useExplorer((s) => s.interiorMode);
   return (
     <Canvas
       camera={{
@@ -245,6 +306,12 @@ export default function Scene({ events }: { events: Event[] }) {
       />
       <Suspense fallback={null}>
         <Earth events={events} />
+        <EquatorLayer />
+        {interior && <mesh raycast={() => {}}>
+          <sphereGeometry args={[100.35, 64, 48]} />
+          <meshBasicMaterial color="#65d9ff" wireframe transparent opacity={0.055} depthWrite={false} />
+        </mesh>}
+        <InteriorFocus />
         <Halos events={events} />
         <EventPulse key={events.at(-1)?.id ?? "none"} event={events.at(-1)} />
       </Suspense>

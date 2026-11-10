@@ -4,6 +4,7 @@ import Scene from "./Scene";
 import { useExplorer } from "./store";
 import { depthColor, type Event, type Status } from "./earthquake";
 import { advanceTime, rangeForPreset, sortChronologically, visibleEventCount } from "./timeline";
+import { depthCategory, validDepth } from "./interior";
 type Response = {
   events: Event[];
   total: number;
@@ -188,6 +189,26 @@ export default function App() {
         <label className="toggle">
           <input
             type="checkbox"
+            checked={s.interiorMode}
+            onChange={(e) => s.set({ interiorMode: e.target.checked })}
+          />{" "}
+          Earth Interior / X-Ray
+        </label>
+        <label className="toggle">
+          <input type="checkbox" checked={s.equator} onChange={(e) => s.set({ equator: e.target.checked })} />{" "}
+          Equator
+        </label>
+        {s.interiorMode && <>
+          <label>Hypocenter visualization</label>
+          <div className="segments" aria-label="Hypocenter depth scale">
+            <button aria-pressed={s.depthScale === "true"} onClick={() => s.set({ depthScale: "true" })}>True scale</button>
+            <button aria-pressed={s.depthScale === "enhanced"} onClick={() => s.set({ depthScale: "enhanced" })}>Enhanced</button>
+          </div>
+          <p className="scale-note">{s.depthScale === "true" ? "True depth scale" : "Enhanced depth · 8× visual exaggeration · not to scale"}</p>
+        </>}
+        <label className="toggle">
+          <input
+            type="checkbox"
             checked={s.autoRotate}
             onChange={(e) => s.set({ autoRotate: e.target.checked })}
           />{" "}
@@ -280,6 +301,9 @@ export default function App() {
           ))}
         </div>
       </aside>
+      {s.interiorMode && !selected && (
+        <p className="interior-hint glass" role="status">Select an earthquake to explore its depth.</p>
+      )}
       {selected && (
         <aside className="details glass" aria-label="Earthquake details">
           <button
@@ -301,7 +325,9 @@ export default function App() {
             </summary>
             <dl>
               <dt>Depth</dt>
-              <dd>{selected.depthKm} km</dd>
+              <dd>{Number.isFinite(selected.depthKm) ? `${selected.depthKm} km` : "Unavailable (not reported)"}</dd>
+              <dt>Depth class</dt>
+              <dd>{depthCategory(selected.depthKm)} <small>· informational only</small></dd>
               <dt>Occurred</dt>
               <dd>
                 {new Date(selected.occurredAt).toLocaleString()}
@@ -313,6 +339,12 @@ export default function App() {
                 {selected.latitude.toFixed(3)}°, {selected.longitude.toFixed(3)}
                 °
               </dd>
+              <dt>Source</dt>
+              <dd>{selected.source.toUpperCase()}</dd>
+              {s.interiorMode && <>
+                <dt>X-Ray position</dt>
+                <dd>{validDepth(selected.depthKm) ? (s.depthScale === "true" ? "True depth scale" : "Enhanced 8× · visualization only · not to scale") : selected.depthKm < 0 ? `Unavailable: reported depth is ${selected.depthKm} km` : "Unavailable for invalid or missing depth"}</dd>
+              </>}
             </dl>
             {selected.felt && <p>Felt: {selected.felt}</p>}
             {selected.tsunamiInformation && (
