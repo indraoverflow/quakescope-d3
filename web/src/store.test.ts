@@ -23,6 +23,17 @@ test("filter changes and accessible selection share state", () => {
   useExplorer.getState().set({ selected: null });
   expect(useExplorer.getState().selected).toBeNull();
 });
+test("equator and interior default off and toggle independently", () => {
+  useExplorer.setState({ equator: false, interiorMode: false, depthScale: "true" });
+  expect(useExplorer.getState().equator).toBe(false);
+  expect(useExplorer.getState().interiorMode).toBe(false);
+  useExplorer.getState().set({ equator: true });
+  expect(useExplorer.getState().interiorMode).toBe(false);
+  useExplorer.getState().set({ interiorMode: true, depthScale: "enhanced" });
+  expect(useExplorer.getState().equator).toBe(true);
+  expect(useExplorer.getState().depthScale).toBe("enhanced");
+  useExplorer.setState({ equator: false, interiorMode: false, depthScale: "true" });
+});
 test("tectonic layer visibility is interaction state", () => {
   useExplorer.getState().set({ tectonicPlates: false });
   expect(useExplorer.getState().tectonicPlates).toBe(false);
@@ -48,4 +59,12 @@ test("tectonic selection does not alter earthquake filters or selection", () => 
   expect(after.selected).toBe(before.selected);
   expect(after.selectedBoundary?.id).toBe("boundary");
   useExplorer.getState().set({ selectedBoundary: null });
+});
+test("interior controls remain independent from live and replay state", () => {
+  const mode = useExplorer.getState().mode;
+  useExplorer.getState().set({ interiorMode: true, depthScale: "enhanced" });
+  expect(useExplorer.getState().mode).toBe(mode);
+  expect(useExplorer.getState().interiorMode).toBe(true);
+  expect(useExplorer.getState().depthScale).toBe("enhanced");
+  useExplorer.getState().set({ interiorMode: false, depthScale: "true" });
 });

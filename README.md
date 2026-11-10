@@ -77,6 +77,10 @@ Frontend query state is separate from Zustand interaction state. The R3F scene r
 
 The optional tectonic layer renders PB2002 boundary LineString and MultiLineString features through the existing globe's spherical path renderer. Coordinates are validated before use, paths sit slightly above the surface to prevent z-fighting, and boundaries remain pickable for their available plate, type, and source metadata. PB2002 is a published geological model, not a real-time measurement of plate motion.
 
+The optional Earth Interior / X-Ray layer uses the selected event's existing latitude/longitude axes and the 6,371 km mean Earth radius to place its hypocenter radially beneath the epicenter. True scale uses `globeRadius × (1 - depthKm / 6371)`. Enhanced mode applies an 8× visual-only depth exaggeration, clamps at Earth's center, and is explicitly labeled “not to scale”; the reported provider depth is never changed. Missing, negative, non-finite, or deeper-than-radius values remain visible in event details but do not produce invented geometry. Depth categories are informational, not risk predictions. X-Ray mode fades the existing globe material and restores it when disabled; it does not create another globe or alter Time Machine playback.
+
+The optional Equator layer is generated locally at latitude 0° with a closed 180-segment path using the same coordinate conversion as earthquake markers. It sits slightly above the globe to avoid z-fighting, remains depth-occluded on the far side, and is off by default. Equator, tectonic boundaries, and Earth Interior visibility are independent and do not reset the camera.
+
 ## Attribution
 
 Earth imagery: NASA Visible Earth / Blue Marble, distributed as the equirectangular `2_no_clouds_4k.jpg` from [webgl-earth](https://github.com/turban/webgl-earth/tree/master/images). The image is bundled locally (about 1.3 MB); NASA imagery usage guidance: https://www.nasa.gov/nasa-brand-center/images-and-media/. No NASA affiliation is implied. Earthquake information: USGS and BMKG (Badan Meteorologi, Klimatologi, dan Geofisika).
